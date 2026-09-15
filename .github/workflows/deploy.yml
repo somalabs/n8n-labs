@@ -1,0 +1,44 @@
+# Deploy manual (workflow_dispatch) — opcional. O caminho padrão é rodar
+# `make deploy ENV=...` da sua máquina; este workflow existe para quem quiser
+# disparar pelo GitHub.
+#
+# Pré-requisitos (uma vez):
+#   1. Service account (ex.: n8n-deployer@soma-ai-hub) com os papéis
+#      roles/compute.instanceAdmin.v1 (ssh via metadata), roles/iam.serviceAccountUser
+#      e roles/secretmanager.secretAccessor + secretmanager.admin (o deploy cria
+#      secrets que faltarem).
+#   2. Secret do repositório GCP_SA_KEY com a chave JSON dessa SA.
+#      (Melhor ainda: trocar por Workload Identity Federation — ver
+#      google-github-actions/auth.)
+name: deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      env:
+        description: Ambiente
+        required: true
+        type: choice
+        options: [dev, prod]
+
+concurrency:
+  group: deploy-${{ inputs.env }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.env }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: soma-ai-hub
+
+      - name: Deploy
+        run: ./scripts/deploy.sh ${{ inputs.env }}

@@ -1,0 +1,11 @@
+# Arquivo renderizado com secrets (nunca commitar)
+.env
+*.rendered.env
+envs/*.local.env
+
+# Dados locais
+backups/
+local-files/*
+!local-files/.gitkeep
+
+.DS_Store
