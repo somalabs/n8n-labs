@@ -8,6 +8,7 @@
 #
 #   ./scripts/deploy.sh prod
 #   ./scripts/deploy.sh dev --no-pull      # não baixa imagens (rede lenta / só mudou config)
+#   SSH_VIA_IAP=1 ./scripts/deploy.sh dev  # fora da VPN: ssh pelo IAP (ver lib.sh)
 #
 # Pré-requisitos por VM (uma vez só): gcp-setup.sh e bootstrap (make bootstrap).
 
@@ -62,16 +63,26 @@ if [ "$PULL" = 1 ]; then
 fi
 vm_ssh "cd ${REMOTE_DIR} && sudo docker compose up -d --remove-orphans && sudo docker compose ps"
 
-log "Aguardando https://${N8N_HOST}/healthz"
-for i in $(seq 1 30); do
-  if curl -fsS --max-time 5 "https://${N8N_HOST}/healthz" >/dev/null 2>&1; then
-    echo "  saudável após ~$((i*5))s"
-    echo
-    log "n8n ${ENV_NAME} em https://${N8N_HOST}/"
-    exit 0
+# O healthz é testado DE DENTRO da VM (via ssh), não daqui: o firewall da
+# soma-network só libera a 443 para a rede da empresa, então de fora da VPN
+# (GitHub Actions, casa) o curl direto nunca responde. O --resolve força o
+# host público a apontar para o próprio Caddy, mas mantém a validação do
+# certificado — se o Let's Encrypt não emitiu, falha do mesmo jeito.
+log "Aguardando https://${N8N_HOST}/healthz (testado na VM)"
+if vm_ssh 'bash -s' <<EOF
+for i in \$(seq 1 30); do
+  if curl -fsS --max-time 5 --resolve "${N8N_HOST}:443:127.0.0.1" "https://${N8N_HOST}/healthz" >/dev/null 2>&1; then
+    echo "  saudável após ~\$((i*5))s"; exit 0
   fi
   sleep 5
 done
-warn "healthz não respondeu em 150s. Veja: make logs ENV=${ENV_NAME}"
+exit 1
+EOF
+then
+  echo
+  log "n8n ${ENV_NAME} em https://${N8N_HOST}/"
+  exit 0
+fi
+warn "healthz não respondeu em 150s. Veja: make logs ENV=${ENV_NAME} SVC=caddy"
 warn "(no primeiro deploy o Let's Encrypt pode levar mais tempo; o Caddy tenta de novo sozinho)"
 exit 1

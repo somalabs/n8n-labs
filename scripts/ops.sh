@@ -19,7 +19,7 @@ DC="cd ${REMOTE_DIR} && sudo docker compose"
 case "$ACAO" in
   status)  vm_ssh "$DC ps; echo; df -h / | tail -1; echo; free -h | head -2" ;;
   logs)    vm_ssh -- -t "$DC logs -f --tail=200 ${ARG}" ;;
-  ssh)     gcloud compute ssh "$VM" --zone="$ZONE" --project="$PROJECT" ;;
+  ssh)     vm_shell ;;
   restart) vm_ssh "$DC restart ${ARG}" ;;
   down)    vm_ssh "$DC down" ;;
   backup)  vm_ssh "sudo ${REMOTE_DIR}/scripts/backup.sh" ;;

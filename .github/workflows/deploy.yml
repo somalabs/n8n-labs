@@ -2,12 +2,27 @@
 # `make deploy ENV=...` da sua máquina; este workflow existe para quem quiser
 # disparar pelo GitHub.
 #
+# Rede: as VMs ficam na Shared VPC `soma-network`, cujo firewall só aceita
+# SSH (22) e HTTPS (443) vindo da rede da empresa (VPN) ou do range do IAP.
+# O runner do GitHub não está em nenhum dos dois, então os scripts abrem o
+# ssh pelo Identity-Aware Proxy (`gcloud compute ssh --tunnel-through-iap`).
+# Isso é automático quando GITHUB_ACTIONS=true (ver scripts/lib.sh); o
+# SSH_VIA_IAP=1 abaixo só deixa explícito. O healthz também é checado de
+# dentro da VM pelo mesmo motivo.
+#
 # Pré-requisitos (uma vez):
-#   1. Service account (ex.: n8n-deployer@soma-ai-hub) com os papéis
-#      roles/compute.instanceAdmin.v1 (ssh via metadata), roles/iam.serviceAccountUser
-#      e roles/secretmanager.secretAccessor + secretmanager.admin (o deploy cria
-#      secrets que faltarem).
-#   2. Secret do repositório GCP_SA_KEY com a chave JSON dessa SA.
+#   1. Service account vm-deploy@soma-ai-hub com os papéis, no projeto:
+#        roles/compute.instanceAdmin.v1   (ssh via metadata)
+#        roles/iam.serviceAccountUser
+#        roles/iap.tunnelResourceAccessor (túnel IAP para a porta 22)
+#        roles/secretmanager.secretAccessor + roles/secretmanager.admin
+#        (o deploy cria secrets que faltarem)
+#      gcloud projects add-iam-policy-binding soma-ai-hub \
+#        --member=serviceAccount:vm-deploy@soma-ai-hub.iam.gserviceaccount.com \
+#        --role=roles/iap.tunnelResourceAccessor
+#   2. A regra de firewall `allow-ingress-from-iap` (35.235.240.0/20 → tcp:22)
+#      já existe na soma-network (projeto soma-infra-network).
+#   3. Secret do repositório GCP_SA_KEY com a chave JSON dessa SA.
 #      (Melhor ainda: trocar por Workload Identity Federation — ver
 #      google-github-actions/auth.)
 name: deploy
@@ -25,6 +40,9 @@ concurrency:
   group: deploy-${{ inputs.env }}
   cancel-in-progress: false
 
+env:
+  SSH_VIA_IAP: "1"
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -39,6 +57,11 @@ jobs:
       - uses: google-github-actions/setup-gcloud@v2
         with:
           project_id: soma-ai-hub
+
+      # O túnel IAP do gcloud usa numpy para acelerar o upload (só um aviso
+      # sem ele, mas o scp dos arquivos fica mais lento).
+      - name: numpy para o túnel IAP
+        run: pip install --quiet numpy
 
       - name: Deploy
         run: ./scripts/deploy.sh ${{ inputs.env }}

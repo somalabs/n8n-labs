@@ -45,6 +45,21 @@ Na sua máquina:
 Na primeira vez que rodar `gcloud compute ssh`, ele cria uma chave em
 `~/.ssh/google_compute_engine` e a registra na VM. Aceite os prompts.
 
+**Rede.** As VMs ficam na Shared VPC `soma-network` (projeto
+`soma-infra-network`), e o firewall dela só aceita SSH (22) e HTTPS (443)
+vindo da rede da empresa (VPN e ranges internos) ou do range do
+Identity-Aware Proxy (`allow-ingress-from-iap`, `35.235.240.0/20`). De fora
+da VPN o IP público da VM não responde em nenhuma das duas portas. Nesse caso
+use o túnel IAP em qualquer alvo do Makefile:
+
+```bash
+SSH_VIA_IAP=1 make deploy ENV=dev
+SSH_VIA_IAP=1 make ssh ENV=prod
+```
+
+Isso exige o papel `roles/iap.tunnelResourceAccessor` no projeto. O GitHub
+Actions já usa esse caminho por padrão (ver [.github/workflows/deploy.yml](.github/workflows/deploy.yml)).
+
 ## 2. Subindo um ambiente do zero
 
 Os passos abaixo valem para `ENV=prod` e `ENV=dev`. Cada um roda **uma vez** por
@@ -95,8 +110,10 @@ make deploy ENV=prod
 
 O deploy renderiza o `.env` (env file + secrets), copia tudo para
 `/opt/n8n`, faz `docker compose pull && up -d` e espera `https://<host>/healthz`
-responder. No primeiro deploy o Caddy emite o certificado — pode levar um
-minuto; se o healthz estourar o tempo, olhe `make logs ENV=prod SVC=caddy`.
+responder. O healthz é testado de dentro da VM (a 443 não é pública, ver
+[Pré-requisitos](#1-pré-requisitos)), mas com validação do certificado. No
+primeiro deploy o Caddy emite o certificado — pode levar um minuto; se o
+healthz estourar o tempo, olhe `make logs ENV=prod SVC=caddy`.
 
 **2.6. Crie o usuário owner.** Abra a URL do ambiente. Na primeira visita o
 n8n pede para criar a conta de administrador. Faça isso logo: até então a
@@ -205,7 +222,8 @@ precisam ser reativados (desativar/ativar o workflow).
 docker-compose.yml        stack (caddy, postgres, redis*, n8n, n8n-worker*)  *profile "queue"
 caddy/Caddyfile           proxy + TLS
 envs/prod.env, dev.env    config não sensível por ambiente (versionada)
-scripts/lib.sh            projeto, mapa env→VM, helpers de ssh
+scripts/lib.sh            projeto, mapa env→VM, helpers de ssh (direto ou via IAP)
+scripts/bootstrap.sh      roda scripts/vm/bootstrap.sh na VM via ssh
 scripts/gcp-setup.sh      tags, IP estático, disco, snapshot, APIs
 scripts/secrets.sh        Secret Manager: ensure | render | set
 scripts/deploy.sh         renderiza .env, copia, compose up, healthcheck
@@ -239,18 +257,29 @@ Na VM, `/opt/n8n` espelha isso: `docker-compose.yml`, `caddy/`, `scripts/`,
 - **Pruning de execuções.** Prod guarda 14 dias/50 k; dev 3 dias/10 k. Sem isso
   o banco só cresce.
 - **`N8N_DIAGNOSTICS_ENABLED=false`.** Sem telemetria para a n8n GmbH.
-- **Firewall.** As regras existentes na `soma-network` liberam 22, 80 e 443 para
-  `0.0.0.0/0`. O n8n tem autenticação própria, mas para dev vale restringir 443
-  aos IPs do escritório/VPN: crie uma regra com `--target-tags=https-server`
-  e `--source-ranges` fechados, e remova a tag `https-server` da regra aberta.
+- **Firewall.** A `soma-network` é fechada: 22 e 443 só entram da rede da
+  empresa (VPN, ranges internos, IP de saída da VPN) ou do range do IAP na 22.
+  Não há regra liberando 80/443 para `0.0.0.0/0`, então o n8n só é acessível
+  por quem está na VPN — e as tags `http-server`/`https-server` que o
+  `gcp-setup.sh` adiciona não têm efeito nessa rede (as regras que existem
+  não filtram por tag). Acesso automatizado (GitHub Actions) entra pelo IAP.
+- **SSH efêmero.** Os scripts passam `--ssh-key-expire-after=1h` ao gcloud, então
+  a chave de quem roda (inclusive de runners descartáveis do GitHub) fica
+  registrada nos metadados do projeto só por uma hora. Ajuste com `SSH_KEY_TTL=`.
 - **Logs.** `json-file` com 20 MB × 5 por container (`/etc/docker/daemon.json`);
   o Ops Agent já está na VM (`enable-osconfig`) se quiser mandar para o Cloud Logging.
 
 ## 10. Problemas conhecidos
 
 - **`healthz` não responde no primeiro deploy.** Quase sempre é o Caddy ainda
-  emitindo o certificado, ou a tag `https-server` faltando (rode `make setup-gcp`).
-  `make logs ENV=x SVC=caddy` mostra o erro do ACME se houver.
+  emitindo o certificado. `make logs ENV=x SVC=caddy` mostra o erro do ACME se
+  houver. Atenção: o Let's Encrypt precisa alcançar a VM na 80/443 para o
+  desafio HTTP-01/TLS-ALPN, e o firewall da `soma-network` não libera isso
+  para a internet — se a emissão falhar por timeout, é esse o motivo.
+- **`gcloud compute ssh` trava / `Connection timed out` na porta 22.** Você está
+  fora da VPN (ou é o GitHub Actions). Use `SSH_VIA_IAP=1` — ver
+  [Pré-requisitos](#1-pré-requisitos). Se der `403` / `Permission denied` no
+  túnel, falta `roles/iap.tunnelResourceAccessor` para quem está rodando.
 - **Let's Encrypt recusou (rate limit).** Emissões repetidas para o mesmo host
   em pouco tempo (5 por semana). Espere ou troque o host.
 - **`permission denied` no docker sem sudo dentro da VM.** O bootstrap adiciona

@@ -31,11 +31,48 @@ SECRET_VARS=(
   "N8N_JWT_SECRET:jwt-secret"
 )
 
+# Como chegar na VM por SSH.
+#
+# As VMs vivem na Shared VPC `soma-network` (host project soma-infra-network),
+# cujo firewall só aceita a porta 22 vindo de dentro da rede da empresa (VPN /
+# ranges internos) ou do range do IAP (35.235.240.0/20, regra
+# `allow-ingress-from-iap`). De fora da VPN — GitHub Actions, sua máquina em
+# casa — o IP público da VM não responde na 22 nem na 443.
+#
+# Por isso, quando SSH_VIA_IAP=1 o gcloud abre o túnel pelo Identity-Aware
+# Proxy (`--tunnel-through-iap`) em vez de bater direto no IP público. Quem
+# faz isso precisa do papel roles/iap.tunnelResourceAccessor no projeto.
+#
+#   SSH_VIA_IAP=1 make deploy ENV=dev     # fora da VPN
+#
+# No GitHub Actions (GITHUB_ACTIONS=true) o padrão já é 1.
+SSH_VIA_IAP="${SSH_VIA_IAP:-${GITHUB_ACTIONS:+1}}"
+SSH_VIA_IAP="${SSH_VIA_IAP:-0}"
+
+# Chaves efêmeras: `gcloud compute ssh` registra a chave da máquina de quem
+# roda nos metadados do projeto. Com expiração, as chaves de runners
+# descartáveis do GitHub não se acumulam como acesso permanente.
+SSH_KEY_TTL="${SSH_KEY_TTL:-1h}"
+
+# Flags comuns a `gcloud compute ssh` e `gcloud compute scp`.
+gcloud_ssh_flags() {
+  local flags=(--project="$PROJECT" --quiet --ssh-key-expire-after="$SSH_KEY_TTL")
+  [ "$SSH_VIA_IAP" = 1 ] && flags+=(--tunnel-through-iap)
+  printf '%s\n' "${flags[@]}"
+}
+
 vm_ssh() {
-  gcloud compute ssh "$VM" --zone="$ZONE" --project="$PROJECT" --quiet -- "$@"
+  local flags=(); while IFS= read -r f; do flags+=("$f"); done < <(gcloud_ssh_flags)
+  gcloud compute ssh "$VM" --zone="$ZONE" "${flags[@]}" -- "$@"
 }
 vm_scp() {
-  gcloud compute scp --zone="$ZONE" --project="$PROJECT" --quiet "$@"
+  local flags=(); while IFS= read -r f; do flags+=("$f"); done < <(gcloud_ssh_flags)
+  gcloud compute scp --zone="$ZONE" "${flags[@]}" "$@"
+}
+# Shell interativo (sem `--`; deixa o gcloud alocar o TTY).
+vm_shell() {
+  local flags=(); while IFS= read -r f; do flags+=("$f"); done < <(gcloud_ssh_flags)
+  gcloud compute ssh "$VM" --zone="$ZONE" "${flags[@]}"
 }
 vm_ip() {
   gcloud compute instances describe "$VM" --zone="$ZONE" --project="$PROJECT" \

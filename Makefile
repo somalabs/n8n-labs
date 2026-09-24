@@ -1,4 +1,5 @@
 # Atalhos. Sempre com ENV=prod ou ENV=dev.
+# Fora da VPN, prefixe com SSH_VIA_IAP=1 (ver scripts/lib.sh).
 #
 #   make setup-gcp ENV=prod    # tags, IP estático, disco, snapshot (uma vez)
 #   make secrets   ENV=prod    # cria secrets no Secret Manager (uma vez)
@@ -23,7 +24,7 @@ secrets:
 	./scripts/secrets.sh $(ENV) ensure
 
 bootstrap:
-	gcloud compute ssh $$(./scripts/print-vm.sh $(ENV) name) --zone=$$(./scripts/print-vm.sh $(ENV) zone) --project=soma-ai-hub --quiet -- 'sudo bash -s' < scripts/vm/bootstrap.sh
+	./scripts/bootstrap.sh $(ENV)
 
 deploy:
 	./scripts/deploy.sh $(ENV)
