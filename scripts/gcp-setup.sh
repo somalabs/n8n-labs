@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 # Prepara o lado GCP de uma VM que JÁ existe (não cria VM):
-#   - tags http-server/https-server (as regras de firewall da soma-network
-#     liberam 80/443 só para quem tem essas tags)
-#   - promove o IP efêmero a estático (o sslip.io/DNS depende dele não mudar)
-#   - aumenta o disco de boot (10 GB de fábrica é pouco para postgres + imagens)
-#   - agenda snapshot diário do disco (é o backup "de desastre"; o pg_dump
-#     local é o backup "de rotina")
-#   - habilita a API do Secret Manager
+#   - habilita as APIs (Secret Manager, Compute, Cloud SQL Admin)
+#   - aumenta o disco de boot (10 GB de fábrica é pouco para imagens + backups)
+#   - agenda snapshot diário do disco (backup "de desastre" do n8n_data e dos
+#     dumps; o banco em si vive no Cloud SQL, com backup próprio)
+#   - confere se o DNS de N8N_HOST aponta para o IP interno da VM
 # Idempotente: pode rodar de novo à vontade. Não reinicia a VM.
+#
+# Não mexe em IP externo nem em tags de firewall: o acesso é pelo DNS interno
+# (registro A → IP interno) e a regra allow-internal-in da soma-network já
+# libera a rede da empresa para qualquer porta da VM.
 #
 #   ./scripts/gcp-setup.sh prod
 
@@ -16,24 +18,9 @@ source "$(dirname "$0")/lib.sh"
 carregar_env "${1:-}"
 exigir gcloud
 
-log "Habilitando APIs (secretmanager, compute)"
-gcloud services enable secretmanager.googleapis.com compute.googleapis.com --project="$PROJECT" --quiet
-
-log "Tags de firewall em ${VM}"
-gcloud compute instances add-tags "$VM" --zone="$ZONE" --project="$PROJECT" \
-  --tags=http-server,https-server --quiet
-
-log "IP estático"
-IP="$(vm_ip)"
-ADDR_NAME="${VM}-ip"
-if gcloud compute addresses describe "$ADDR_NAME" --region="$REGION" --project="$PROJECT" >/dev/null 2>&1; then
-  echo "  ${ADDR_NAME} já existe ($(gcloud compute addresses describe "$ADDR_NAME" --region="$REGION" --project="$PROJECT" --format='value(address)'))"
-else
-  # Promover o IP atual mantém o que já está em uso (nada muda para quem já aponta pra ele).
-  gcloud compute addresses create "$ADDR_NAME" --region="$REGION" --project="$PROJECT" \
-    --addresses="$IP" --quiet
-  echo "  ${IP} promovido a estático como ${ADDR_NAME}"
-fi
+log "Habilitando APIs (secretmanager, compute, sqladmin)"
+gcloud services enable secretmanager.googleapis.com compute.googleapis.com sqladmin.googleapis.com \
+  --project="$PROJECT" --quiet
 
 log "Disco de boot → ${DISK_SIZE_GB} GB"
 DISK="$(gcloud compute instances describe "$VM" --zone="$ZONE" --project="$PROJECT" --format='value(disks[0].source.basename())')"
@@ -63,7 +50,16 @@ else
   echo "  ${POLICY} anexada a ${DISK}"
 fi
 
+log "DNS de ${N8N_HOST}"
+INTERNO="$(vm_internal_ip)"
+RESOLVIDO="$(dig +short "$N8N_HOST" 2>/dev/null | head -1 || true)"
+if [ "$RESOLVIDO" = "$INTERNO" ]; then
+  echo "  ${N8N_HOST} → ${INTERNO} (IP interno de ${VM}) ok"
+elif [ -z "$RESOLVIDO" ]; then
+  warn "${N8N_HOST} não resolve daqui. Fora da VPN é esperado; na VPN, confira o registro A → ${INTERNO}"
+else
+  warn "${N8N_HOST} resolve para ${RESOLVIDO}, mas o IP interno de ${VM} é ${INTERNO}"
+fi
+
 echo
-log "Pronto. Host sugerido sem DNS: ${IP}.sslip.io"
-[ "${N8N_HOST}" = "${IP}.sslip.io" ] || warn "envs/${ENV_NAME}.env tem N8N_HOST=${N8N_HOST}; confira se aponta para ${IP}"
 echo "Próximos passos: make secrets ENV=${ENV_NAME} && make bootstrap ENV=${ENV_NAME} && make deploy ENV=${ENV_NAME}"

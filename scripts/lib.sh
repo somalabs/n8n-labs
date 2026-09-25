@@ -5,6 +5,9 @@
 PROJECT="soma-ai-hub"
 REGION="us-central1"
 REMOTE_DIR="/opt/n8n"
+# Instância Cloud SQL (Postgres) compartilhada por dev e prod; cada ambiente
+# tem database/usuário próprios (POSTGRES_DB/POSTGRES_USER em envs/<env>.env).
+CLOUDSQL_INSTANCE="n8n"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
@@ -77,6 +80,10 @@ vm_shell() {
 vm_ip() {
   gcloud compute instances describe "$VM" --zone="$ZONE" --project="$PROJECT" \
     --format="value(networkInterfaces[0].accessConfigs[0].natIP)"
+}
+vm_internal_ip() {
+  gcloud compute instances describe "$VM" --zone="$ZONE" --project="$PROJECT" \
+    --format="value(networkInterfaces[0].networkIP)"
 }
 
 log()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }

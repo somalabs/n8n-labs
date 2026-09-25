@@ -5,28 +5,37 @@
 #   prod: COMPOSE_PROFILES=queue  → n8n main + redis + N workers (queue mode)
 #   dev:  COMPOSE_PROFILES=       → n8n main sozinho (regular mode)
 #
-# Caddy fica na frente com HTTPS automático (Let's Encrypt). Só 80/443 saem
-# da máquina; n8n, postgres e redis ficam na rede interna do compose.
+# Banco: Cloud SQL (instância `n8n`, IP privado na soma-network) — nada de
+# postgres na VM. O n8n main publica a porta N8N_PUBLISH_PORT (80) direto no
+# host; o DNS interno (n8n-<env>.somalabs.com.br) aponta para o IP interno da
+# VM e só quem está na VPN chega até aqui. Redis fica só na rede do compose.
 
 x-n8n-common: &n8n-common
   image: docker.n8n.io/n8nio/n8n:${N8N_VERSION:?defina N8N_VERSION}
   restart: unless-stopped
   environment: &n8n-env
-    # --- URL pública (Caddy termina TLS e repassa para :5678) -------------
+    # --- URL pública (HTTP puro, sem proxy na frente) ------------------------
     N8N_HOST: ${N8N_HOST:?defina N8N_HOST}
     N8N_PORT: "5678"
-    N8N_PROTOCOL: https
-    N8N_EDITOR_BASE_URL: https://${N8N_HOST}/
-    WEBHOOK_URL: https://${N8N_HOST}/
-    N8N_PROXY_HOPS: "1"
-    # --- Banco --------------------------------------------------------------
+    N8N_PROTOCOL: http
+    N8N_EDITOR_BASE_URL: http://${N8N_HOST}/
+    WEBHOOK_URL: http://${N8N_HOST}/
+    # Sem TLS o navegador não aceita cookie `Secure`; sem isto o login não passa.
+    N8N_SECURE_COOKIE: "false"
+    # --- Banco (Cloud SQL) --------------------------------------------------
     DB_TYPE: postgresdb
-    DB_POSTGRESDB_HOST: postgres
-    DB_POSTGRESDB_PORT: "5432"
-    DB_POSTGRESDB_DATABASE: ${POSTGRES_DB:-n8n}
-    DB_POSTGRESDB_USER: ${POSTGRES_USER:-n8n}
+    DB_POSTGRESDB_HOST: ${POSTGRES_HOST:?defina POSTGRES_HOST (IP privado do Cloud SQL)}
+    DB_POSTGRESDB_PORT: ${POSTGRES_PORT:-5432}
+    DB_POSTGRESDB_DATABASE: ${POSTGRES_DB:?defina POSTGRES_DB}
+    DB_POSTGRESDB_USER: ${POSTGRES_USER:?defina POSTGRES_USER}
     DB_POSTGRESDB_PASSWORD: ${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD}
     DB_POSTGRESDB_SCHEMA: public
+    # A instância exige TLS (sslMode ENCRYPTED_ONLY). O certificado do Cloud SQL
+    # é emitido para o connection name, não para o IP, então a verificação de
+    # hostname falharia — daí REJECT_UNAUTHORIZED=false. O tráfego continua
+    # cifrado e nunca sai da VPC.
+    DB_POSTGRESDB_SSL_ENABLED: "true"
+    DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED: "false"
     # --- Segurança ----------------------------------------------------------
     # Perder esta chave = perder TODAS as credenciais salvas. Vive no Secret
     # Manager (n8n-<env>-encryption-key); nunca rotacione sem migrar.
@@ -60,47 +69,8 @@ x-n8n-common: &n8n-common
     - n8n_data:/home/node/.n8n
     # Pasta compartilhada para os nós Read/Write Files (/files dentro do n8n).
     - ./local-files:/files
-  depends_on:
-    postgres:
-      condition: service_healthy
 
 services:
-  caddy:
-    image: caddy:2-alpine
-    container_name: n8n-caddy
-    restart: unless-stopped
-    ports:
-      - "80:80"
-      - "443:443"
-      - "443:443/udp"
-    environment:
-      N8N_HOST: ${N8N_HOST}
-      ACME_EMAIL: ${ACME_EMAIL:?defina ACME_EMAIL em envs/<env>.env}
-    volumes:
-      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-      - caddy_config:/config
-    depends_on:
-      - n8n
-
-  postgres:
-    image: postgres:${POSTGRES_VERSION:-16}-alpine
-    container_name: n8n-postgres
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER:-n8n}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB:-n8n}
-      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
-    shm_size: 256mb
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-n8n} -d ${POSTGRES_DB:-n8n}"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-
   redis:
     image: redis:7-alpine
     container_name: n8n-redis
@@ -119,9 +89,10 @@ services:
   n8n:
     <<: *n8n-common
     container_name: n8n-main
-    # Fica só na rede interna: quem expõe é o Caddy.
-    expose:
-      - "5678"
+    # Publica direto no host: http://<N8N_HOST>:<N8N_PUBLISH_PORT>/ → n8n:5678.
+    # Com N8N_PUBLISH_PORT=80 a URL fica sem porta (http://n8n-dev.somalabs.com.br/).
+    ports:
+      - "${N8N_PUBLISH_PORT:-80}:5678"
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:5678/healthz >/dev/null || exit 1"]
       interval: 30s
@@ -136,8 +107,6 @@ services:
     deploy:
       replicas: ${N8N_WORKER_REPLICAS:-2}
     depends_on:
-      postgres:
-        condition: service_healthy
       redis:
         condition: service_healthy
       n8n:
@@ -151,7 +120,4 @@ services:
 
 volumes:
   n8n_data:
-  postgres_data:
   redis_data:
-  caddy_data:
-  caddy_config:

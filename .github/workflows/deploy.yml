@@ -3,7 +3,7 @@
 # disparar pelo GitHub.
 #
 # Rede: as VMs ficam na Shared VPC `soma-network`, cujo firewall só aceita
-# SSH (22) e HTTPS (443) vindo da rede da empresa (VPN) ou do range do IAP.
+# tráfego vindo da rede da empresa (VPN) ou, na porta 22, do range do IAP.
 # O runner do GitHub não está em nenhum dos dois, então os scripts abrem o
 # ssh pelo Identity-Aware Proxy (`gcloud compute ssh --tunnel-through-iap`).
 # Isso é automático quando GITHUB_ACTIONS=true (ver scripts/lib.sh); o
@@ -17,6 +17,8 @@
 #        roles/iap.tunnelResourceAccessor (túnel IAP para a porta 22)
 #        roles/secretmanager.secretAccessor + roles/secretmanager.admin
 #        (o deploy cria secrets que faltarem)
+#        roles/cloudsql.admin (o deploy cria database/usuário que faltarem
+#        na instância Cloud SQL `n8n`; ver scripts/cloudsql.sh)
 #      gcloud projects add-iam-policy-binding soma-ai-hub \
 #        --member=serviceAccount:vm-deploy@soma-ai-hub.iam.gserviceaccount.com \
 #        --role=roles/iap.tunnelResourceAccessor
