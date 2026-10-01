@@ -8,6 +8,7 @@
 #   make deploy    ENV=prod    # toda vez que mudar envs/prod.env, versão ou compose
 #   make cloudbuild-setup  ENV=prod   # papéis, secret do env file e trigger no Cloud Build (uma vez)
 #   make cloudbuild-deploy ENV=prod   # o mesmo deploy, rodando no Cloud Build (branch main)
+#                                     # (os dois ambientes também disparam sozinhos a cada push em main)
 #   make cloudbuild-submit ENV=dev    # idem com a árvore local, sem push (testar o pipeline)
 #   make migrate-db ENV=dev    # postgres antigo da VM → Cloud SQL (uma vez, após o 1º deploy novo)
 #   make status / logs / ssh / psql / backup / backups / restore / restart ENV=prod

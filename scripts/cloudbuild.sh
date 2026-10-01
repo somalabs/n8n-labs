@@ -9,9 +9,10 @@
 #   ./scripts/cloudbuild.sh prod builds   # últimos builds deste ambiente
 #   ./scripts/cloudbuild.sh prod log [id] # log de um build (padrão: o mais recente)
 #
-# Trigger: n8n-deploy-<env>, manual, no repo somalabs/n8n-labs (conexão
-# github-somalabs, 2ª geração, região us-central1), branch main, com
-# _ENV=<env>. Roda como a SA vm-deploy — a mesma que o GitHub Actions usava.
+# Trigger: n8n-deploy-<env> no repo somalabs/n8n-labs (conexão github-somalabs,
+# 2ª geração, região us-central1), branch main, com _ENV=<env>. Roda como a SA
+# vm-deploy — a mesma que o GitHub Actions usava. Dispara sozinho a cada push
+# em main (dev e prod), e também por `run` ou pelo console.
 
 set -euo pipefail
 source "$(dirname "$0")/lib.sh"
@@ -97,18 +98,15 @@ case "$ACAO" in
     log "Secret do env file"
     "${ROOT_DIR}/scripts/secrets.sh" "$ENV_NAME" env-file
 
-    log "Trigger ${TRIGGER} (manual, branch ${BRANCH}, _ENV=${ENV_NAME})"
     if gcloud builds triggers describe "$TRIGGER" "${CB[@]}" >/dev/null 2>&1; then
       gcloud builds triggers delete "$TRIGGER" "${CB[@]}" --quiet
       echo "  recriando ${TRIGGER}"
     fi
-    gcloud builds triggers create manual --name="$TRIGGER" "${CB[@]}" \
-      --repository="$REPO" --branch="$BRANCH" \
-      --build-config=cloudbuild.yaml \
-      --substitutions="_ENV=${ENV_NAME}" \
-      --service-account="projects/${PROJECT}/serviceAccounts/${SA}" \
-      --description="n8n ${ENV_NAME}: scripts/deploy.sh via IAP (manual)" \
-      --quiet >/dev/null
+    COMUM=(--name="$TRIGGER" "${CB[@]}" --repository="$REPO" --build-config=cloudbuild.yaml
+      --substitutions="_ENV=${ENV_NAME}" --service-account="projects/${PROJECT}/serviceAccounts/${SA}" --quiet)
+    log "Trigger ${TRIGGER} (push em ${BRANCH}, _ENV=${ENV_NAME})"
+    gcloud builds triggers create github "${COMUM[@]}" --branch-pattern="^${BRANCH}\$" \
+      --description="n8n ${ENV_NAME}: scripts/deploy.sh via IAP a cada push em ${BRANCH}" >/dev/null
     echo "  criado  ${TRIGGER}"
     echo
     echo "Pronto: make cloudbuild-deploy ENV=${ENV_NAME}"

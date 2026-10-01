@@ -180,8 +180,13 @@ Idempotente. Garante os papéis da SA `vm-deploy` (`compute.instanceAdmin.v1`,
 leitura do bucket `soma-ai-hub_cloudbuild`), confere
 que o repo `somalabs/n8n-labs` está vinculado à conexão GitHub
 `github-somalabs` (2ª geração), copia `envs/prod.env` para o secret
-`n8n-prod-env-file` e cria o trigger **manual** `n8n-deploy-prod` (branch
-`main`, substituição `_ENV=prod`, SA `vm-deploy`).
+`n8n-prod-env-file` e cria o trigger `n8n-deploy-prod` (branch `main`,
+substituição `_ENV=prod`, SA `vm-deploy`).
+
+Os dois triggers (`n8n-deploy-dev`, `n8n-deploy-prod`) disparam **sozinhos a
+cada push em `main`** — um push faz deploy de dev e de prod ao mesmo tempo.
+Também dá para disparar na mão com `make cloudbuild-deploy ENV=<env>` ou pelo
+console (Cloud Build › Triggers › Run).
 
 **Toda vez:**
 
@@ -199,17 +204,22 @@ para o bucket `soma-ai-hub_cloudbuild` (respeitando o `.gitignore`, então os
 leia esse bucket (`roles/storage.objectViewer` nele; o `cloudbuild-setup`
 concede).
 
-O trigger só constrói o que está na branch `main` do GitHub: **faça push
-antes**. Mudanças no compose ou nos scripts que ainda estão só na sua máquina
-não entram no build (outra branch: `CLOUDBUILD_BRANCH=minha-branch make
-cloudbuild-deploy ENV=dev`). Já o `envs/<env>.env` é lido do secret, e o
-`cloudbuild-deploy` envia uma versão nova só quando o conteúdo local mudou —
-o arquivo na sua máquina continua sendo a fonte da verdade.
+O trigger só constrói o que está na branch `main` do GitHub: **o push já é o
+deploy**. Mudanças no compose ou nos scripts que
+ainda estão só na sua máquina não entram no build (outra branch:
+`CLOUDBUILD_BRANCH=minha-branch make cloudbuild-deploy ENV=dev`). Já o
+`envs/<env>.env` é lido do secret, e o `cloudbuild-deploy` envia uma versão
+nova só quando o conteúdo local mudou — o arquivo na sua máquina continua sendo
+a fonte da verdade. Mudou só o env file? Rode `make cloudbuild-deploy
+ENV=<env>` (ou `./scripts/secrets.sh <env> env-file` e um push): o push sozinho
+não enxerga o seu arquivo local.
 
-Quem dispara precisa de `roles/cloudbuild.builds.editor` no projeto e de
-`iam.serviceAccounts.actAs` na SA `vm-deploy` (`roles/iam.serviceAccountUser`
-nela). Também dá para disparar pelo console: Cloud Build › Triggers ›
-`n8n-deploy-<env>` › Run.
+Quem dispara na mão precisa de `roles/cloudbuild.builds.editor` no projeto e
+de `iam.serviceAccounts.actAs` na SA `vm-deploy` (`roles/iam.serviceAccountUser`
+nela). Como prod também sobe a cada push em `main`, trate a branch como
+produção: teste em outra branch (`CLOUDBUILD_BRANCH=minha-branch make
+cloudbuild-deploy ENV=dev`) ou com `make cloudbuild-submit ENV=dev` antes de
+dar merge, e faça `make backup ENV=prod` antes de subir uma versão nova do n8n.
 
 O build faz dois passos: `validate` (`docker compose config` com o env file
 real e secrets de mentira, igual ao `make validate`) e `deploy`
@@ -428,8 +438,9 @@ root), `backups/`, `local-files/`.
 - **Cloud Build em vez de GitHub Actions.** O deploy automatizado fica no
   mesmo projeto das VMs: sem chave JSON de service account guardada no GitHub,
   sem cópia do env file em secret do repositório — o build já roda como a SA
-  `vm-deploy` e lê o Secret Manager direto. O trigger é manual de propósito:
-  um push em `main` não faz deploy sozinho.
+  `vm-deploy` e lê o Secret Manager direto. Os dois ambientes fazem deploy a
+  cada push em `main`, então `main` é produção: o que ainda não está pronto
+  fica em outra branch.
 - **Logs.** `json-file` com 20 MB × 5 por container (`/etc/docker/daemon.json`);
   o Ops Agent já está na VM (`enable-osconfig`) se quiser mandar para o Cloud Logging.
 

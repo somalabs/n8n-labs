@@ -2,9 +2,10 @@
 # que rodando num worker do GCP em vez da sua máquina. Substitui o antigo
 # workflow do GitHub Actions.
 #
-# Disparo: manual, por trigger (um por ambiente, criados por
-# `make cloudbuild-setup ENV=<env>`):
+# Disparo: um trigger por ambiente (criados por `make cloudbuild-setup ENV=<env>`),
+# cada um rodando sozinho a cada push em main — um push faz deploy de dev E prod.
 #
+#   git push origin main                # → deploy automático de dev e prod
 #   make cloudbuild-deploy ENV=prod     # = gcloud builds triggers run n8n-deploy-prod --branch=main
 #   make cloudbuild-submit ENV=dev      # = gcloud builds submit (sua árvore local, sem push; para testar)
 #
