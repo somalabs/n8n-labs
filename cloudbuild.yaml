@@ -6,6 +6,7 @@
 # `make cloudbuild-setup ENV=<env>`):
 #
 #   make cloudbuild-deploy ENV=prod     # = gcloud builds triggers run n8n-deploy-prod --branch=main
+#   make cloudbuild-submit ENV=dev      # = gcloud builds submit (sua árvore local, sem push; para testar)
 #
 # Rede: as VMs ficam na Shared VPC `soma-network`, cujo firewall só aceita
 # a porta 22 vindo da VPN ou do range do IAP. O worker do Cloud Build não
@@ -50,6 +51,8 @@ steps:
     secretEnv: [ENV_FILE]
     env:
       - SSH_VIA_IAP=1
+      # O container roda como root e a VM recusa root por ssh (ver lib.sh).
+      - SSH_USER=cloudbuild
       - CLOUDSDK_CORE_PROJECT=$PROJECT_ID
       - CLOUDSDK_CORE_DISABLE_PROMPTS=1
     args:

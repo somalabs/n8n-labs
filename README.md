@@ -176,7 +176,8 @@ make cloudbuild-setup ENV=prod
 
 Idempotente. Garante os papéis da SA `vm-deploy` (`compute.instanceAdmin.v1`,
 `iam.serviceAccountUser`, `iap.tunnelResourceAccessor`, `secretmanager.admin`,
-`secretmanager.secretAccessor`, `cloudsql.admin`, `logging.logWriter`), confere
+`secretmanager.secretAccessor`, `cloudsql.admin`, `logging.logWriter`, e
+leitura do bucket `soma-ai-hub_cloudbuild`), confere
 que o repo `somalabs/n8n-labs` está vinculado à conexão GitHub
 `github-somalabs` (2ª geração), copia `envs/prod.env` para o secret
 `n8n-prod-env-file` e cria o trigger **manual** `n8n-deploy-prod` (branch
@@ -186,9 +187,17 @@ que o repo `somalabs/n8n-labs` está vinculado à conexão GitHub
 
 ```bash
 make cloudbuild-deploy ENV=prod      # sincroniza envs/prod.env → secret, dispara o trigger e segue o log
+make cloudbuild-submit ENV=dev       # idem, mas com a sua árvore local (gcloud builds submit), sem push
 make cloudbuild-builds ENV=prod      # últimos builds do ambiente
 make cloudbuild-log    ENV=prod      # log do último build (ou ID=<build-id>)
 ```
+
+`cloudbuild-submit` serve para testar mudanças no próprio pipeline
+(`cloudbuild.yaml`, `scripts/`) antes de ir para `main`: sobe a árvore local
+para o bucket `soma-ai-hub_cloudbuild` (respeitando o `.gitignore`, então os
+`envs/*.env` ficam de fora) e roda o mesmo build. Exige que a SA `vm-deploy`
+leia esse bucket (`roles/storage.objectViewer` nele; o `cloudbuild-setup`
+concede).
 
 O trigger só constrói o que está na branch `main` do GitHub: **faça push
 antes**. Mudanças no compose ou nos scripts que ainda estão só na sua máquina
@@ -204,8 +213,11 @@ nela). Também dá para disparar pelo console: Cloud Build › Triggers ›
 
 O build faz dois passos: `validate` (`docker compose config` com o env file
 real e secrets de mentira, igual ao `make validate`) e `deploy`
-(`scripts/deploy.sh <env>` com `SSH_VIA_IAP=1`). Timeout de 15 min. Os logs
-ficam só no Cloud Logging (`CLOUD_LOGGING_ONLY`).
+(`scripts/deploy.sh <env>` com `SSH_VIA_IAP=1` e `SSH_USER=cloudbuild` — o
+container roda como root e a VM recusa root por ssh, então a chave efêmera
+entra nos metadados como usuário `cloudbuild`). Timeout de 15 min. Os logs
+ficam só no Cloud Logging (`CLOUD_LOGGING_ONLY`); `make cloudbuild-deploy`
+os lê de lá enquanto segue o build.
 
 ## 4. Atualizar a versão do n8n
 

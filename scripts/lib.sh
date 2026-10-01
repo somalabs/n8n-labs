@@ -51,6 +51,14 @@ SECRET_VARS=(
 # O cloudbuild.yaml já exporta SSH_VIA_IAP=1 no passo de deploy.
 SSH_VIA_IAP="${SSH_VIA_IAP:-0}"
 
+# Usuário Linux na VM. Vazio = o usuário local (padrão do gcloud). O worker do
+# Cloud Build roda como root, e as imagens do GCE recusam login de root por ssh
+# (PermitRootLogin no) — por isso o cloudbuild.yaml define SSH_USER=cloudbuild.
+# A chave vai para os metadados do projeto como "<SSH_USER>:ssh-rsa ..." e o
+# guest agent cria o usuário na VM com sudo sem senha.
+SSH_USER="${SSH_USER:-}"
+SSH_TARGET="${SSH_USER:+${SSH_USER}@}"
+
 # Chaves efêmeras: `gcloud compute ssh` registra a chave da máquina de quem
 # roda nos metadados do projeto. Com expiração, as chaves de workers
 # descartáveis do Cloud Build não se acumulam como acesso permanente.
@@ -65,16 +73,18 @@ gcloud_ssh_flags() {
 
 vm_ssh() {
   local flags=(); while IFS= read -r f; do flags+=("$f"); done < <(gcloud_ssh_flags)
-  gcloud compute ssh "$VM" --zone="$ZONE" "${flags[@]}" -- "$@"
+  gcloud compute ssh "${SSH_TARGET}${VM}" --zone="$ZONE" "${flags[@]}" -- "$@"
 }
 vm_scp() {
   local flags=(); while IFS= read -r f; do flags+=("$f"); done < <(gcloud_ssh_flags)
-  gcloud compute scp --zone="$ZONE" "${flags[@]}" "$@"
+  # Os chamadores escrevem "${VM}:caminho"; prefixamos o usuário aqui.
+  local args=() a; for a in "$@"; do args+=("${a/#${VM}:/${SSH_TARGET}${VM}:}"); done
+  gcloud compute scp --zone="$ZONE" "${flags[@]}" "${args[@]}"
 }
 # Shell interativo (sem `--`; deixa o gcloud alocar o TTY).
 vm_shell() {
   local flags=(); while IFS= read -r f; do flags+=("$f"); done < <(gcloud_ssh_flags)
-  gcloud compute ssh "$VM" --zone="$ZONE" "${flags[@]}"
+  gcloud compute ssh "${SSH_TARGET}${VM}" --zone="$ZONE" "${flags[@]}"
 }
 vm_ip() {
   gcloud compute instances describe "$VM" --zone="$ZONE" --project="$PROJECT" \

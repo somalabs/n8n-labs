@@ -8,6 +8,7 @@
 #   make deploy    ENV=prod    # toda vez que mudar envs/prod.env, versão ou compose
 #   make cloudbuild-setup  ENV=prod   # papéis, secret do env file e trigger no Cloud Build (uma vez)
 #   make cloudbuild-deploy ENV=prod   # o mesmo deploy, rodando no Cloud Build (branch main)
+#   make cloudbuild-submit ENV=dev    # idem com a árvore local, sem push (testar o pipeline)
 #   make migrate-db ENV=dev    # postgres antigo da VM → Cloud SQL (uma vez, após o 1º deploy novo)
 #   make status / logs / ssh / psql / backup / backups / restore / restart ENV=prod
 
@@ -20,7 +21,7 @@ ifeq ($(ENV),)
 $(error informe ENV=prod ou ENV=dev)
 endif
 
-.PHONY: setup-gcp secrets setup-db db-info bootstrap deploy deploy-config cloudbuild-setup cloudbuild-deploy cloudbuild-builds cloudbuild-log status logs ssh psql restart down backup backups fetch-backup restore migrate-db validate
+.PHONY: setup-gcp secrets setup-db db-info bootstrap deploy deploy-config cloudbuild-setup cloudbuild-deploy cloudbuild-submit cloudbuild-builds cloudbuild-log status logs ssh psql restart down backup backups fetch-backup restore migrate-db validate
 
 setup-gcp:
 	./scripts/gcp-setup.sh $(ENV)
@@ -51,6 +52,10 @@ cloudbuild-setup:
 
 cloudbuild-deploy:
 	./scripts/cloudbuild.sh $(ENV) run
+
+# Mesmo build, mas com a árvore local (sem push) — para testar mudanças no pipeline.
+cloudbuild-submit:
+	./scripts/cloudbuild.sh $(ENV) submit
 
 cloudbuild-builds:
 	./scripts/cloudbuild.sh $(ENV) builds
