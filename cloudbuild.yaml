@@ -1,0 +1,71 @@
+# Deploy do n8n pelo Cloud Build — o mesmo `scripts/deploy.sh` de sempre, só
+# que rodando num worker do GCP em vez da sua máquina. Substitui o antigo
+# workflow do GitHub Actions.
+#
+# Disparo: manual, por trigger (um por ambiente, criados por
+# `make cloudbuild-setup ENV=<env>`):
+#
+#   make cloudbuild-deploy ENV=prod     # = gcloud builds triggers run n8n-deploy-prod --branch=main
+#
+# Rede: as VMs ficam na Shared VPC `soma-network`, cujo firewall só aceita
+# a porta 22 vindo da VPN ou do range do IAP. O worker do Cloud Build não
+# está em nenhum dos dois, então o ssh vai pelo Identity-Aware Proxy
+# (SSH_VIA_IAP=1 → `gcloud compute ssh --tunnel-through-iap`, ver
+# scripts/lib.sh). O healthz também é testado de dentro da VM.
+#
+# Identidade: o build roda como a SA vm-deploy@soma-ai-hub (papéis em
+# scripts/cloudbuild.sh). Quem dispara o trigger precisa de
+# roles/cloudbuild.builds.editor e iam.serviceAccounts.actAs nessa SA.
+#
+# envs/<env>.env NÃO é versionado. O Cloud Build o lê do secret
+# n8n-<env>-env-file (Secret Manager), que `make cloudbuild-deploy` sincroniza
+# a partir do seu arquivo local antes de disparar (scripts/secrets.sh env-file).
+
+substitutions:
+  _ENV: dev
+
+availableSecrets:
+  secretManager:
+    - versionName: projects/$PROJECT_ID/secrets/n8n-${_ENV}-env-file/versions/latest
+      env: ENV_FILE
+
+steps:
+  # Sanidade do compose com o env file real + secrets de mentira (igual ao
+  # `make validate`), antes de encostar na VM. Não precisa de daemon.
+  - id: validate
+    name: docker:cli
+    entrypoint: sh
+    secretEnv: [ENV_FILE]
+    args:
+      - -euc
+      - |
+        [ -n "$$ENV_FILE" ] || { echo "secret n8n-${_ENV}-env-file vazio: rode make cloudbuild-deploy ENV=${_ENV} (ele sincroniza envs/${_ENV}.env)" >&2; exit 1; }
+        printf '%s\n' "$$ENV_FILE" | grep -vE '^[[:space:]]*(#|$$)' > /tmp/validate.env
+        printf 'POSTGRES_PASSWORD=x\nN8N_ENCRYPTION_KEY=x\nN8N_JWT_SECRET=x\n' >> /tmp/validate.env
+        docker compose --env-file /tmp/validate.env config -q && echo "compose ok (${_ENV})"
+
+  - id: deploy
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    secretEnv: [ENV_FILE]
+    env:
+      - SSH_VIA_IAP=1
+      - CLOUDSDK_CORE_PROJECT=$PROJECT_ID
+      - CLOUDSDK_CORE_DISABLE_PROMPTS=1
+    args:
+      - -euo
+      - pipefail
+      - -c
+      - |
+        # gcloud compute ssh/scp precisam de ssh e ssh-keygen no worker.
+        command -v ssh >/dev/null || { apt-get update -qq && apt-get install -y -qq openssh-client >/dev/null; }
+        printf '%s\n' "$$ENV_FILE" > "envs/${_ENV}.env"
+        ./scripts/deploy.sh "${_ENV}"
+
+serviceAccount: projects/soma-ai-hub/serviceAccounts/vm-deploy@soma-ai-hub.iam.gserviceaccount.com
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+# deploy.sh espera até 150 s pelo healthz; o resto é pull de imagem na VM.
+timeout: 900s

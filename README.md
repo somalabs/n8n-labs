@@ -5,13 +5,15 @@ banco no Cloud SQL:
 
 | Ambiente | VM         | Zona            | Máquina       | Modo                             | URL (só na VPN)                    | Banco (Cloud SQL `n8n`) |
 | -------- | ---------- | --------------- | ------------- | -------------------------------- | ---------------------------------- | ----------------------- |
-| prod     | `n8n-prod` | `us-central1-a` | e2-standard-4 | queue (main + redis + 2 workers) | `http://n8n-prod.somalabs.com.br` | `n8n_prod` / `n8n_prod` |
-| dev      | `n8n-dev`  | `us-central1-f` | e2-medium     | regular (processo único)         | `http://n8n-dev.somalabs.com.br`  | `n8n_dev` / `n8n_dev`   |
+| prod     | `n8n-prod` | `us-central1-a` | e2-standard-4 | queue (main + redis + 2 workers) | `http://n8n-prod.somalabs.com.br` | `n8n_prod` / `postgres` |
+| dev      | `n8n-dev`  | `us-central1-f` | e2-medium     | regular (processo único)         | `http://n8n-dev.somalabs.com.br`  | `n8n_dev` / `postgres`  |
 
 Tudo roda em Docker Compose na VM, em `/opt/n8n`. Um único
 [docker-compose.yml](docker-compose.yml) serve os dois ambientes; o que muda é o
-arquivo de ambiente ([envs/prod.env](envs/prod.env), [envs/dev.env](envs/dev.env))
-mais os secrets, que vivem no Secret Manager.
+arquivo de ambiente (`envs/prod.env`, `envs/dev.env` — **locais, fora do git**;
+os modelos versionados são [envs/prod.env.example](envs/prod.env.example) e
+[envs/dev.env.example](envs/dev.env.example)) mais os secrets, que vivem no
+Secret Manager.
 
 ```
 VPN ──DNS interno──▶ VM :80 ──▶ n8n main :5678 ──TLS──▶ Cloud SQL `n8n` (Postgres 18, IP privado)
@@ -23,7 +25,7 @@ Não há proxy nem TLS na VM: o DNS `n8n-<env>.somalabs.com.br` é um registro A
 para o **IP interno** da VM, só alcançável pela VPN, e o n8n publica a porta 80
 direto no host. O Postgres não roda mais em container — é a instância Cloud SQL
 `n8n` (IP privado `10.232.168.6` na Shared VPC `soma-network`), com um database
-e um usuário por ambiente.
+por ambiente e o usuário `postgres` que já existe nela — nenhum usuário é criado.
 
 ## Índice
 
@@ -67,13 +69,17 @@ SSH_VIA_IAP=1 make deploy ENV=dev
 SSH_VIA_IAP=1 make ssh ENV=prod
 ```
 
-Isso exige o papel `roles/iap.tunnelResourceAccessor` no projeto. O GitHub
-Actions já usa esse caminho por padrão (ver [.github/workflows/deploy.yml](.github/workflows/deploy.yml)).
+Isso exige o papel `roles/iap.tunnelResourceAccessor` no projeto. O deploy
+pelo Cloud Build já usa esse caminho (ver [cloudbuild.yaml](cloudbuild.yaml) e
+[Deploy pelo Cloud Build](#deploy-pelo-cloud-build)).
 
 ## 2. Subindo um ambiente do zero
 
 Os passos abaixo valem para `ENV=prod` e `ENV=dev`. Cada um roda **uma vez** por
 ambiente, exceto o `deploy`.
+
+**2.0. Crie o env file local.** `cp envs/<env>.env.example envs/<env>.env` e
+ajuste se precisar. Ele não vai para o git.
 
 **2.1. Confira o DNS.** `n8n-<env>.somalabs.com.br` precisa ser um registro A
 para o IP interno da VM (`./scripts/print-vm.sh <env> internal-ip`). O
@@ -92,12 +98,15 @@ agendamento de snapshot diário do disco e confere o DNS.
 **2.3. Crie os secrets:**
 
 ```bash
+./scripts/secrets.sh prod set POSTGRES_PASSWORD   # senha do usuário postgres do Cloud SQL (pede no terminal)
 make secrets ENV=prod
 ```
 
-Cria `n8n-prod-postgres-password`, `n8n-prod-encryption-key` e
-`n8n-prod-jwt-secret` com valores aleatórios. Nunca sobrescreve um secret que já
-existe.
+O primeiro comando grava `n8n-prod-postgres-password` com a senha do usuário
+existente no Cloud SQL (`POSTGRES_USER`); ela nunca é gerada. O `make secrets`
+cria `n8n-prod-encryption-key` e `n8n-prod-jwt-secret` com valores aleatórios e
+recusa continuar se a senha do banco não estiver cadastrada. Nunca sobrescreve
+um secret que já existe.
 
 > A **encryption key** criptografa todas as credenciais salvas no n8n. Se ela
 > se perder, as credenciais viram lixo. Ela só existe no Secret Manager e no
@@ -116,8 +125,8 @@ make bootstrap ENV=prod
 make deploy ENV=prod
 ```
 
-O deploy garante os secrets, cria no Cloud SQL o database e o usuário do
-ambiente se ainda não existirem (com a senha do Secret Manager), renderiza o
+O deploy garante os secrets, cria no Cloud SQL o database do ambiente se
+ainda não existir e confere que `POSTGRES_USER` existe lá, renderiza o
 `.env` (env file + secrets), copia tudo para `/opt/n8n`, faz
 `docker compose pull && up -d` e espera `http://127.0.0.1:80/healthz`
 responder de dentro da VM. Na primeira subida o n8n cria as tabelas no Cloud
@@ -149,6 +158,55 @@ recria o que mudou.
 Todos os alvos do Makefile são só atalhos para [scripts/](scripts/), que aceitam
 o ambiente como primeiro argumento (`./scripts/ops.sh prod status`).
 
+### Deploy pelo Cloud Build
+
+Opcional. Roda **o mesmo** `scripts/deploy.sh`, só que num worker do Cloud
+Build (projeto `soma-ai-hub`, `us-central1`) em vez da sua máquina: não
+precisa de VPN, gcloud local nem chave ssh sua na VM. O worker entra pelo IAP e
+roda como a service account `vm-deploy@soma-ai-hub`. A configuração está em
+[cloudbuild.yaml](cloudbuild.yaml); os atalhos, em
+[scripts/cloudbuild.sh](scripts/cloudbuild.sh).
+
+**Uma vez por ambiente** (precisa de Owner ou dos papéis para IAM, Secret
+Manager e Cloud Build):
+
+```bash
+make cloudbuild-setup ENV=prod
+```
+
+Idempotente. Garante os papéis da SA `vm-deploy` (`compute.instanceAdmin.v1`,
+`iam.serviceAccountUser`, `iap.tunnelResourceAccessor`, `secretmanager.admin`,
+`secretmanager.secretAccessor`, `cloudsql.admin`, `logging.logWriter`), confere
+que o repo `somalabs/n8n-labs` está vinculado à conexão GitHub
+`github-somalabs` (2ª geração), copia `envs/prod.env` para o secret
+`n8n-prod-env-file` e cria o trigger **manual** `n8n-deploy-prod` (branch
+`main`, substituição `_ENV=prod`, SA `vm-deploy`).
+
+**Toda vez:**
+
+```bash
+make cloudbuild-deploy ENV=prod      # sincroniza envs/prod.env → secret, dispara o trigger e segue o log
+make cloudbuild-builds ENV=prod      # últimos builds do ambiente
+make cloudbuild-log    ENV=prod      # log do último build (ou ID=<build-id>)
+```
+
+O trigger só constrói o que está na branch `main` do GitHub: **faça push
+antes**. Mudanças no compose ou nos scripts que ainda estão só na sua máquina
+não entram no build (outra branch: `CLOUDBUILD_BRANCH=minha-branch make
+cloudbuild-deploy ENV=dev`). Já o `envs/<env>.env` é lido do secret, e o
+`cloudbuild-deploy` envia uma versão nova só quando o conteúdo local mudou —
+o arquivo na sua máquina continua sendo a fonte da verdade.
+
+Quem dispara precisa de `roles/cloudbuild.builds.editor` no projeto e de
+`iam.serviceAccounts.actAs` na SA `vm-deploy` (`roles/iam.serviceAccountUser`
+nela). Também dá para disparar pelo console: Cloud Build › Triggers ›
+`n8n-deploy-<env>` › Run.
+
+O build faz dois passos: `validate` (`docker compose config` com o env file
+real e secrets de mentira, igual ao `make validate`) e `deploy`
+(`scripts/deploy.sh <env>` com `SSH_VIA_IAP=1`). Timeout de 15 min. Os logs
+ficam só no Cloud Logging (`CLOUD_LOGGING_ONLY`).
+
 ## 4. Atualizar a versão do n8n
 
 1. Mude `N8N_VERSION` em `envs/dev.env` e rode `make deploy ENV=dev`.
@@ -167,12 +225,12 @@ Releases: <https://github.com/n8n-io/n8n/releases>. Use só versões sem sufixo
 
 Uma instância só, `n8n` (`soma-ai-hub:us-central1:n8n`, Postgres 18,
 `db-custom-2-8192`, regional, só IP privado, TLS obrigatório), atende os dois
-ambientes:
+ambientes com o usuário que já existe nela:
 
 | Ambiente | `POSTGRES_DB` | `POSTGRES_USER` | Senha (Secret Manager)      |
 | -------- | ------------- | --------------- | --------------------------- |
-| prod     | `n8n_prod`    | `n8n_prod`      | `n8n-prod-postgres-password` |
-| dev      | `n8n_dev`     | `n8n_dev`       | `n8n-dev-postgres-password`  |
+| prod     | `n8n_prod`    | `postgres`      | `n8n-prod-postgres-password` |
+| dev      | `n8n_dev`     | `postgres`      | `n8n-dev-postgres-password`  |
 
 Host, porta, database e usuário ficam em `envs/<env>.env`
 (`POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_DB`, `POSTGRES_USER`);
@@ -180,11 +238,13 @@ Host, porta, database e usuário ficam em `envs/<env>.env`
 backup/restore (acompanhe a major da instância).
 
 [scripts/cloudsql.sh](scripts/cloudsql.sh) (`make setup-db`, chamado também
-pelo `deploy`) cria database e usuário pela API se faltarem e **nunca altera o
-que já existe** — se você rotacionar `n8n-<env>-postgres-password` com
-`./scripts/secrets.sh <env> set POSTGRES_PASSWORD`, aplique a mesma senha no
-usuário pelo console (instância `n8n` › Users) ou com
-`gcloud sql users set-password`, e então `make deploy`.
+pelo `deploy`) cria o database pela API se faltar e confere que `POSTGRES_USER`
+existe na instância. **Nunca cria nem altera usuário ou senha.** Se a senha do
+usuário mudar no Cloud SQL, grave a nova com
+`./scripts/secrets.sh <env> set POSTGRES_PASSWORD` e rode `make deploy`.
+
+Quem roda o deploy precisa de `roles/cloudsql.admin` no projeto (você, ou a
+SA `vm-deploy` no caso do Cloud Build).
 
 O n8n conecta com `DB_POSTGRESDB_SSL_ENABLED=true` e
 `DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED=false`: a instância exige TLS, mas o
@@ -297,13 +357,14 @@ o n8n oferece _Source Control_ com Git, mas é recurso do plano Enterprise.
 
 ```
 docker-compose.yml        stack (n8n, redis*, n8n-worker*)  *profile "queue"
-envs/prod.env, dev.env    config não sensível por ambiente (versionada)
+envs/*.env.example        modelos versionados; copie para envs/<env>.env (local, fora do git)
 scripts/lib.sh            projeto, instância Cloud SQL, mapa env→VM, helpers de ssh (direto ou via IAP)
 scripts/bootstrap.sh      roda scripts/vm/bootstrap.sh na VM via ssh
 scripts/gcp-setup.sh      APIs, disco, snapshot, checagem de DNS
-scripts/secrets.sh        Secret Manager: ensure | render | set
-scripts/cloudsql.sh       Cloud SQL: ensure (database + usuário do ambiente) | info
+scripts/secrets.sh        Secret Manager: ensure | render | set | env-file (cópia do envs/<env>.env para o Cloud Build)
+scripts/cloudsql.sh       Cloud SQL: ensure (database do ambiente; confere o usuário) | info
 scripts/deploy.sh         secrets, cloudsql, renderiza .env, copia, compose up, healthcheck
+scripts/cloudbuild.sh     Cloud Build: setup (papéis, secret do env file, trigger) | run | builds | log
 scripts/ops.sh            status, logs, ssh, psql, restart, backup, restore, migrate-db, fetch-backup, down
 scripts/vm/bootstrap.sh   roda na VM: docker, cron, logs, updates
 scripts/vm/lib-pg.sh      roda na VM: psql/pg_dump/pg_restore em container, apontados para o Cloud SQL
@@ -311,7 +372,7 @@ scripts/vm/backup.sh      roda na VM (cron): pg_dump + exports + retenção
 scripts/vm/restore.sh     roda na VM: restaura um dump no Cloud SQL
 scripts/vm/psql.sh        roda na VM: psql interativo
 scripts/vm/migrate-to-cloudsql.sh  roda na VM (uma vez): volume postgres antigo → Cloud SQL
-.github/workflows/        deploy manual pelo GitHub (opcional, ver comentários)
+cloudbuild.yaml           deploy manual pelo Cloud Build (opcional; trigger n8n-deploy-<env>)
 Makefile                  atalhos; exige ENV=prod|dev
 local-files/              montado em /files no n8n (nós Read/Write Files)
 ```
@@ -333,8 +394,12 @@ root), `backups/`, `local-files/`.
 - **Secrets fora do git e fora da VM até o deploy.** O `deploy.sh` lê do Secret
   Manager com _sua_ credencial e grava o `.env` na VM com permissão 600. A SA da
   VM não precisa de acesso ao Secret Manager (e não tem).
-- **`cloudsql.sh ensure` não altera nada que já exista**, pelo mesmo motivo do
-  `secrets.sh ensure`: um deploy nunca troca senha de banco por baixo dos panos.
+- **`cloudsql.sh ensure` só cria database.** Usuário e senha são os que já
+  existem no Cloud SQL; um deploy nunca cria usuário nem troca senha.
+- **Env files fora do git.** `envs/*.env` são locais (`.gitignore`); o repo só
+  tem os `.example`. O Cloud Build os lê do secret `n8n-<env>-env-file`, que
+  `make cloudbuild-deploy` sincroniza a partir do seu arquivo local (ver
+  [cloudbuild.yaml](cloudbuild.yaml)).
 - **`N8N_RUNNERS_ENABLED=true`, `N8N_BLOCK_ENV_ACCESS_IN_NODE=true`.** Nós Code
   rodam isolados e não leem as variáveis de ambiente do container (onde estão
   a senha do banco e a encryption key).
@@ -344,23 +409,38 @@ root), `backups/`, `local-files/`.
 - **Firewall.** A `soma-network` é fechada: a regra `allow-internal-in` libera
   qualquer porta para `10.0.0.0/8`, `192.168.0.0/16` e `172.16.0.0/12` (VPN e
   ranges internos); a 22 também entra pelo range do IAP. Não há regra para
-  `0.0.0.0/0`. Acesso automatizado (GitHub Actions) entra pelo IAP.
+  `0.0.0.0/0`. Acesso automatizado (Cloud Build) entra pelo IAP.
 - **SSH efêmero.** Os scripts passam `--ssh-key-expire-after=1h` ao gcloud, então
-  a chave de quem roda (inclusive de runners descartáveis do GitHub) fica
+  a chave de quem roda (inclusive de workers descartáveis do Cloud Build) fica
   registrada nos metadados do projeto só por uma hora. Ajuste com `SSH_KEY_TTL=`.
+- **Cloud Build em vez de GitHub Actions.** O deploy automatizado fica no
+  mesmo projeto das VMs: sem chave JSON de service account guardada no GitHub,
+  sem cópia do env file em secret do repositório — o build já roda como a SA
+  `vm-deploy` e lê o Secret Manager direto. O trigger é manual de propósito:
+  um push em `main` não faz deploy sozinho.
 - **Logs.** `json-file` com 20 MB × 5 por container (`/etc/docker/daemon.json`);
   o Ops Agent já está na VM (`enable-osconfig`) se quiser mandar para o Cloud Logging.
 
 ## 12. Problemas conhecidos
 
 - **`healthz` não responde no deploy.** Quase sempre é o n8n esperando o banco.
-  `make logs ENV=x SVC=n8n`: erro de autenticação → a senha do usuário no Cloud
-  SQL não bate com o secret (ver [seção 5](#5-banco-de-dados-cloud-sql));
+  `make logs ENV=x SVC=n8n`: erro de autenticação → o secret
+  `n8n-<env>-postgres-password` não é a senha atual do usuário no Cloud SQL
+  (ver [seção 5](#5-banco-de-dados-cloud-sql));
   timeout → `POSTGRES_HOST` errado ou a VM não está na mesma VPC da instância.
 - **`gcloud compute ssh` trava / `Connection timed out` na porta 22.** Você está
-  fora da VPN (ou é o GitHub Actions). Use `SSH_VIA_IAP=1` — ver
-  [Pré-requisitos](#1-pré-requisitos). Se der `403` / `Permission denied` no
-  túnel, falta `roles/iap.tunnelResourceAccessor` para quem está rodando.
+  fora da VPN. Use `SSH_VIA_IAP=1` — ver [Pré-requisitos](#1-pré-requisitos).
+  Se der `403` / `Permission denied` no túnel, falta
+  `roles/iap.tunnelResourceAccessor` para quem está rodando (no Cloud Build, a
+  SA `vm-deploy`; `make cloudbuild-setup` concede).
+- **Cloud Build falha em `validate` com "secret vazio" ou `NOT_FOUND`.** O
+  secret `n8n-<env>-env-file` não existe ou está sem versão: rode
+  `make cloudbuild-setup ENV=<env>` (ou `./scripts/secrets.sh <env> env-file`).
+  Se o build reclama de permissão ao disparar, falta `iam.serviceAccounts.actAs`
+  na SA `vm-deploy` para o seu usuário.
+- **Cloud Build fez deploy de código velho.** O trigger constrói a branch
+  `main` do GitHub, não a sua cópia local. Faça push (ou use
+  `CLOUDBUILD_BRANCH=`).
 - **O navegador abre a URL mas o login não completa.** `N8N_SECURE_COOKIE` tem
   que ser `false` enquanto o acesso é HTTP; o compose já define. Se colocar um
   proxy com TLS na frente, inverta.

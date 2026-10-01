@@ -10,6 +10,7 @@
 #   ./scripts/deploy.sh prod
 #   ./scripts/deploy.sh dev --no-pull      # não baixa imagens (rede lenta / só mudou config)
 #   SSH_VIA_IAP=1 ./scripts/deploy.sh dev  # fora da VPN: ssh pelo IAP (ver lib.sh)
+#   make cloudbuild-deploy ENV=dev         # o mesmo, rodando no Cloud Build (ver cloudbuild.yaml)
 #
 # Pré-requisitos por VM (uma vez só): gcp-setup.sh e bootstrap (make bootstrap).
 
@@ -75,7 +76,7 @@ vm_ssh "cd ${REMOTE_DIR} && sudo docker compose up -d --remove-orphans && sudo d
 
 # O healthz é testado DE DENTRO da VM (via ssh): o DNS aponta para o IP
 # interno e o firewall só deixa a rede da empresa (VPN) chegar — de fora
-# (GitHub Actions, casa) o curl direto nunca responde.
+# (Cloud Build, casa) o curl direto nunca responde.
 log "Aguardando http://127.0.0.1:${PORTA}/healthz (testado na VM)"
 if vm_ssh 'bash -s' <<EOF
 for i in \$(seq 1 30); do

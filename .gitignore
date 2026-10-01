@@ -9,3 +9,7 @@ local-files/*
 !local-files/.gitkeep
 
 .DS_Store
+
+# Config por ambiente fica só na sua máquina; versione apenas os .example
+envs/*.env
+!envs/*.env.example

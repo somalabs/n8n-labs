@@ -39,7 +39,7 @@ SECRET_VARS=(
 # As VMs vivem na Shared VPC `soma-network` (host project soma-infra-network),
 # cujo firewall só aceita a porta 22 vindo de dentro da rede da empresa (VPN /
 # ranges internos) ou do range do IAP (35.235.240.0/20, regra
-# `allow-ingress-from-iap`). De fora da VPN — GitHub Actions, sua máquina em
+# `allow-ingress-from-iap`). De fora da VPN — Cloud Build, sua máquina em
 # casa — o IP público da VM não responde na 22 nem na 443.
 #
 # Por isso, quando SSH_VIA_IAP=1 o gcloud abre o túnel pelo Identity-Aware
@@ -48,13 +48,12 @@ SECRET_VARS=(
 #
 #   SSH_VIA_IAP=1 make deploy ENV=dev     # fora da VPN
 #
-# No GitHub Actions (GITHUB_ACTIONS=true) o padrão já é 1.
-SSH_VIA_IAP="${SSH_VIA_IAP:-${GITHUB_ACTIONS:+1}}"
+# O cloudbuild.yaml já exporta SSH_VIA_IAP=1 no passo de deploy.
 SSH_VIA_IAP="${SSH_VIA_IAP:-0}"
 
 # Chaves efêmeras: `gcloud compute ssh` registra a chave da máquina de quem
-# roda nos metadados do projeto. Com expiração, as chaves de runners
-# descartáveis do GitHub não se acumulam como acesso permanente.
+# roda nos metadados do projeto. Com expiração, as chaves de workers
+# descartáveis do Cloud Build não se acumulam como acesso permanente.
 SSH_KEY_TTL="${SSH_KEY_TTL:-1h}"
 
 # Flags comuns a `gcloud compute ssh` e `gcloud compute scp`.
