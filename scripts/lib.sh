@@ -42,14 +42,14 @@ SECRET_VARS=(
 # `allow-ingress-from-iap`). De fora da VPN — Cloud Build, sua máquina em
 # casa — o IP público da VM não responde na 22 nem na 443.
 #
-# Por isso, quando SSH_VIA_IAP=1 o gcloud abre o túnel pelo Identity-Aware
-# Proxy (`--tunnel-through-iap`) em vez de bater direto no IP público. Quem
-# faz isso precisa do papel roles/iap.tunnelResourceAccessor no projeto.
+# Mesmo NA VPN o `gcloud compute ssh` padrão mira o IP público e dá timeout:
+# a conexão sai pela internet e chega ao firewall vinda de fora dos ranges
+# internos. Por isso o padrão aqui é o túnel pelo Identity-Aware Proxy
+# (`--tunnel-through-iap`), que funciona de qualquer lugar. Quem roda precisa
+# do papel roles/iap.tunnelResourceAccessor no projeto.
 #
-#   SSH_VIA_IAP=1 make deploy ENV=dev     # fora da VPN
-#
-# O cloudbuild.yaml já exporta SSH_VIA_IAP=1 no passo de deploy.
-SSH_VIA_IAP="${SSH_VIA_IAP:-0}"
+#   SSH_VIA_IAP=0 make ssh ENV=dev        # força ssh direto (só se souber o que está fazendo)
+SSH_VIA_IAP="${SSH_VIA_IAP:-1}"
 
 # Usuário Linux na VM. Vazio = o usuário local (padrão do gcloud). O worker do
 # Cloud Build roda como root, e as imagens do GCE recusam login de root por ssh

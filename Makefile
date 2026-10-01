@@ -1,5 +1,5 @@
 # Atalhos. Sempre com ENV=prod ou ENV=dev.
-# Fora da VPN, prefixe com SSH_VIA_IAP=1 (ver scripts/lib.sh).
+# O ssh para as VMs vai pelo túnel IAP por padrão (ver scripts/lib.sh).
 #
 #   make setup-gcp ENV=prod    # APIs, disco, snapshot, checagem de DNS (uma vez)
 #   make secrets   ENV=prod    # cria secrets no Secret Manager (uma vez; antes: secrets.sh set POSTGRES_PASSWORD)

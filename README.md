@@ -60,18 +60,15 @@ Na primeira vez que rodar `gcloud compute ssh`, ele cria uma chave em
 **Rede.** As VMs ficam na Shared VPC `soma-network` (projeto
 `soma-infra-network`). O firewall dela (`allow-internal-in`) libera qualquer
 porta para a rede da empresa (VPN e ranges internos), e a porta 22 para o range
-do Identity-Aware Proxy (`allow-ingress-from-iap`, `35.235.240.0/20`). De fora
-da VPN nem o IP público nem o DNS interno respondem. Nesse caso use o túnel IAP
-em qualquer alvo do Makefile:
-
-```bash
-SSH_VIA_IAP=1 make deploy ENV=dev
-SSH_VIA_IAP=1 make ssh ENV=prod
-```
-
-Isso exige o papel `roles/iap.tunnelResourceAccessor` no projeto. O deploy
-pelo Cloud Build já usa esse caminho (ver [cloudbuild.yaml](cloudbuild.yaml) e
-[Deploy pelo Cloud Build](#deploy-pelo-cloud-build)).
+do Identity-Aware Proxy (`allow-ingress-from-iap`, `35.235.240.0/20`). O IP
+público da VM não responde na 22 nem de dentro da VPN (a conexão sai pela
+internet e chega ao firewall como tráfego externo), então **todo ssh/scp dos
+scripts vai pelo túnel IAP por padrão** (`gcloud compute ssh
+--tunnel-through-iap`). Isso exige o papel `roles/iap.tunnelResourceAccessor`
+no projeto. O Cloud Build usa o mesmo caminho (ver [cloudbuild.yaml](cloudbuild.yaml)
+e [Deploy pelo Cloud Build](#deploy-pelo-cloud-build)). Já a URL do n8n
+(`http://n8n-<env>.somalabs.com.br`) só abre na VPN: o DNS aponta para o IP
+interno.
 
 ## 2. Subindo um ambiente do zero
 
@@ -451,11 +448,11 @@ root), `backups/`, `local-files/`.
   `n8n-<env>-postgres-password` não é a senha atual do usuário no Cloud SQL
   (ver [seção 5](#5-banco-de-dados-cloud-sql));
   timeout → `POSTGRES_HOST` errado ou a VM não está na mesma VPC da instância.
-- **`gcloud compute ssh` trava / `Connection timed out` na porta 22.** Você está
-  fora da VPN. Use `SSH_VIA_IAP=1` — ver [Pré-requisitos](#1-pré-requisitos).
-  Se der `403` / `Permission denied` no túnel, falta
-  `roles/iap.tunnelResourceAccessor` para quem está rodando (no Cloud Build, a
-  SA `vm-deploy`; `make cloudbuild-setup` concede).
+- **`gcloud compute ssh` trava / `Connection timed out` na porta 22 (IP
+  público).** Alguém forçou `SSH_VIA_IAP=0`; o ssh direto não funciona nem na
+  VPN — ver [Pré-requisitos](#1-pré-requisitos). Se der `403` / `Permission
+  denied` no túnel IAP, falta `roles/iap.tunnelResourceAccessor` para quem está
+  rodando (no Cloud Build, a SA `vm-deploy`; `make cloudbuild-setup` concede).
 - **Cloud Build falha em `validate` com "secret vazio" ou `NOT_FOUND`.** O
   secret `n8n-<env>-env-file` não existe ou está sem versão: rode
   `make cloudbuild-setup ENV=<env>` (ou `./scripts/secrets.sh <env> env-file`).

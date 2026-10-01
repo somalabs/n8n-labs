@@ -9,7 +9,7 @@
 #
 #   ./scripts/deploy.sh prod
 #   ./scripts/deploy.sh dev --no-pull      # não baixa imagens (rede lenta / só mudou config)
-#   SSH_VIA_IAP=1 ./scripts/deploy.sh dev  # fora da VPN: ssh pelo IAP (ver lib.sh)
+#   (o ssh/scp para a VM vai pelo túnel IAP por padrão — ver lib.sh)
 #   make cloudbuild-deploy ENV=dev         # o mesmo, rodando no Cloud Build (ver cloudbuild.yaml)
 #
 # Pré-requisitos por VM (uma vez só): gcp-setup.sh e bootstrap (make bootstrap).
